@@ -1,6 +1,9 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const axios = require('axios');
+const os = require('os');
+const fs = require('fs');
+const path = require('path');
 
 puppeteer.use(StealthPlugin());
 
@@ -1352,11 +1355,15 @@ class AWSChecker {
             }
           }
 
+          // Create unique temp profile to avoid SingletonLock conflicts
+          const userDataDir = path.join(os.tmpdir(), `puppeteer_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+
           browser = await puppeteer.launch({ 
             headless: 'new', 
             args: launchArgs, 
             defaultViewport: null,
             protocolTimeout: 180000,
+            userDataDir,
           });
 
           const result = await this.checkEmail(email, browser, proxyConfig);
@@ -1376,6 +1383,7 @@ class AWSChecker {
           this.log('warn', `[${keyLabel}] ⟳ ${email}: lỗi "${err.message}" — retry ${attempt}/${MAX_RETRIES}`);
         } finally {
           if (browser) try { await browser.close(); } catch(e) {}
+          try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch(e) {}
         }
 
         // Before retry: verify proxy is still working, if not wait for new one
@@ -1477,11 +1485,15 @@ class AWSChecker {
             if (attempt === 1 && round === 1) this.log('info', `Proxy: ${proxyConfig.server}`);
           }
 
+          // Create unique temp profile to avoid SingletonLock conflicts
+          const userDataDir = path.join(os.tmpdir(), `puppeteer_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+
           browser = await puppeteer.launch({ 
             headless: 'new', 
             args: launchArgs, 
             defaultViewport: null,
             protocolTimeout: 180000,
+            userDataDir,
           });
           const result = await this.checkEmail(email, browser, proxyConfig);
 
@@ -1497,6 +1509,7 @@ class AWSChecker {
           this.log('warn', `⟳ ${email}: lỗi "${err.message}" — retry ${attempt}/${MAX_RETRIES}`);
         } finally {
           if (browser) try { await browser.close(); } catch(e) {}
+          try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch(e) {}
         }
 
         if (attempt < MAX_RETRIES && this.running) {
