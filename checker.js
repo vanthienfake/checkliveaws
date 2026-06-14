@@ -1294,9 +1294,22 @@ class AWSChecker {
     this.log('info', `[${keyLabel}] Worker bắt đầu với ${emails.length} email(s)`);
 
     const PAUSE_BUFFER_SEC = 30;
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 5;
+    const MAX_ROUNDS = 10;
 
-    for (const email of emails) {
+    let currentQueue = [...emails];
+    let round = 0;
+
+    while (currentQueue.length > 0 && round < MAX_ROUNDS && this.running) {
+      round++;
+      if (round > 1) {
+        this.log('info', `[${keyLabel}] ═══ Retry round ${round}/${MAX_ROUNDS} — ${currentQueue.length} email(s) cần thử lại ═══`);
+        await this.sleep(15000);
+        slot.cachedProxyTime = 0;
+      }
+      const retryQueue = [];
+
+    for (const email of currentQueue) {
       if (!this.running) break;
 
       let finalResult = null;
@@ -1334,7 +1347,7 @@ class AWSChecker {
           ];
           if (proxyConfig) {
             launchArgs.push(`--proxy-server=${proxyConfig.server}`);
-            if (attempt === 1) {
+            if (attempt === 1 && round === 1) {
               this.log('info', `[${keyLabel}] Proxy: ${proxyConfig.server}`);
             }
           }
@@ -1380,12 +1393,9 @@ class AWSChecker {
         this.checked++;
         if (this.onResult) this.onResult(finalResult);
       } else {
-        // All retries exhausted — mark as ERROR (timeout/proxy ≠ account dead)
-        this.checked++;
-        const errorResult = { email, status: 'error', reason: `Không xác minh được sau ${MAX_RETRIES} lần thử (timeout/proxy)` };
-        this.results.error.push(errorResult);
-        if (this.onResult) this.onResult(errorResult);
-        this.log('error', `[${keyLabel}] ${email}: ${MAX_RETRIES} lần thử đều lỗi → ERROR (cần kiểm tra proxy)`);
+        // All retries exhausted this round — queue for next round
+        retryQueue.push(email);
+        this.log('warn', `[${keyLabel}] ${email}: chưa xác minh — sẽ thử lại`);
       }
 
       if (this.onProgress) this.onProgress({
@@ -1393,10 +1403,26 @@ class AWSChecker {
         live: this.results.live.length, dead: this.results.dead.length, error: this.results.error.length
       });
 
-      // Delay between emails
       if (this.running) {
         await this.sleep(this.delay);
       }
+    }
+
+    currentQueue = retryQueue;
+    }
+
+    // Remaining unresolved emails after all rounds → DEAD
+    for (const email of currentQueue) {
+      if (!this.running) break;
+      this.checked++;
+      const deadResult = { email, status: 'dead', reason: `Không thể xác minh sau ${MAX_ROUNDS} rounds` };
+      this.results.dead.push(deadResult);
+      if (this.onResult) this.onResult(deadResult);
+      this.log('warn', `[${keyLabel}] ${email}: không thể xác minh → DEAD`);
+      if (this.onProgress) this.onProgress({
+        checked: this.checked, total: this.emails.length,
+        live: this.results.live.length, dead: this.results.dead.length, error: this.results.error.length
+      });
     }
 
     this.log('info', `[${keyLabel}] Worker hoàn thành`);
@@ -1408,9 +1434,21 @@ class AWSChecker {
    */
   async workerLoopStatic(emails) {
     this.log('info', `Worker (static proxy) bắt đầu với ${emails.length} email(s)`);
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 5;
+    const MAX_ROUNDS = 10;
 
-    for (const email of emails) {
+    let currentQueue = [...emails];
+    let round = 0;
+
+    while (currentQueue.length > 0 && round < MAX_ROUNDS && this.running) {
+      round++;
+      if (round > 1) {
+        this.log('info', `═══ Retry round ${round}/${MAX_ROUNDS} — ${currentQueue.length} email(s) cần thử lại ═══`);
+        await this.sleep(15000);
+      }
+      const retryQueue = [];
+
+    for (const email of currentQueue) {
       if (!this.running) break;
 
       let finalResult = null;
@@ -1436,7 +1474,7 @@ class AWSChecker {
           ];
           if (proxyConfig) {
             launchArgs.push(`--proxy-server=${proxyConfig.server}`);
-            if (attempt === 1) this.log('info', `Proxy: ${proxyConfig.server}`);
+            if (attempt === 1 && round === 1) this.log('info', `Proxy: ${proxyConfig.server}`);
           }
 
           browser = await puppeteer.launch({ 
@@ -1471,11 +1509,8 @@ class AWSChecker {
         this.checked++;
         if (this.onResult) this.onResult(finalResult);
       } else {
-        this.checked++;
-        const errorResult = { email, status: 'error', reason: `Không xác minh được sau ${MAX_RETRIES} lần thử (timeout/proxy)` };
-        this.results.error.push(errorResult);
-        if (this.onResult) this.onResult(errorResult);
-        this.log('error', `${email}: ${MAX_RETRIES} lần thử đều lỗi → ERROR (cần kiểm tra proxy)`);
+        retryQueue.push(email);
+        this.log('warn', `${email}: chưa xác minh — sẽ thử lại`);
       }
 
       if (this.onProgress) this.onProgress({
@@ -1486,6 +1521,23 @@ class AWSChecker {
       if (this.running) {
         await this.sleep(this.delay);
       }
+    }
+
+    currentQueue = retryQueue;
+    }
+
+    // Remaining unresolved → DEAD
+    for (const email of currentQueue) {
+      if (!this.running) break;
+      this.checked++;
+      const deadResult = { email, status: 'dead', reason: `Không thể xác minh sau ${MAX_ROUNDS} rounds` };
+      this.results.dead.push(deadResult);
+      if (this.onResult) this.onResult(deadResult);
+      this.log('warn', `${email}: không thể xác minh → DEAD`);
+      if (this.onProgress) this.onProgress({
+        checked: this.checked, total: this.emails.length,
+        live: this.results.live.length, dead: this.results.dead.length, error: this.results.error.length
+      });
     }
 
     this.log('info', `Worker (static) hoàn thành`);
